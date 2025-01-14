@@ -1,4 +1,4 @@
-# ManusMIDI
+# ManusMIDI (2024 HackMIT)
 ## Inspiration
 As passionate musicians, we were eager to develop an interactive project that incorporated everything necessary: fun, creativity, and melodic freedom.
 ## What it does
