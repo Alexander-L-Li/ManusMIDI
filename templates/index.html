@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Manus MIDI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      @tailwind base;
+      @tailwind components;
+      @tailwind utilities;
+
+      :root {
+        --background: #ffffff;
+        --foreground: #171717;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --background: #0a0a0a;
+          --foreground: #ededed;
+        }
+      }
+
+      body {
+        color: var(--foreground);
+        background: var(--background);
+        font-family: Arial, Helvetica, sans-serif;
+      }
+
+      @layer utilities {
+        .text-balance {
+          text-wrap: balance;
+        }
+      }
+    </style>
+  </head>
+  <body
+    class="h-screen w-screen bg-gradient-to-tr from-lime-100 to-emerald-100 flex flex-col items-center justify-center"
+  >
+    <!-- Title Section -->
+    <div id="intro-section" class="text-center">
+      <h1
+        class="lg:text-8xl md:text-6xl text-4xl font-bold text-black lg:pb-5 md:pb-3 pb-1"
+      >
+        Manus MIDI
+      </h1>
+      <p class="lg:text-5xl md:text-4xl text-xl font-light text-black">
+        Create music — with just your hands!
+      </p>
+    </div>
+
+    <!-- Video Feed Section -->
+    <div
+      id="video-container"
+      class="hidden flex flex-col items-center justify-center h-full w-full"
+    >
+      <div
+        class="relative aspect-video w-full max-w-6xl bg-black rounded-lg overflow-hidden shadow-lg"
+      >
+        <img
+          id="video-feed"
+          src="/video_feed"
+          alt="Video Stream"
+          class="absolute inset-0 w-full h-full object-cover"
+        />
+      </div>
+      <p class="text-center mt-4 text-lg text-gray-700">
+        Watch your hand movements in real-time!
+      </p>
+    </div>
+
+    <!-- Try Button Section -->
+    <div id="button-container" class="mt-10">
+      <button
+        onclick="startVideoFeed()"
+        class="transition duration-300 ease-in-out bg-clear lg:p-8 md:p-5 p-2 lg:m-16 md:m-10 m-5 lg:text-4xl md:text-2xl text-xl font-medium text-black border-black border-2 rounded-full hover:bg-green-300 hover:drop-shadow-lg"
+      >
+        Give it a try!
+      </button>
+    </div>
+
+    <script>
+      function startVideoFeed() {
+        // Hide the introduction and button
+        document.getElementById("intro-section").classList.add("hidden");
+        document.getElementById("button-container").classList.add("hidden");
+
+        // Show the video feed container
+        const videoContainer = document.getElementById("video-container");
+        videoContainer.classList.remove("hidden");
+        videoContainer.classList.add("flex");
+      }
+    </script>
+  </body>
+</html>
