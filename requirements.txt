@@ -1,4 +1,4 @@
 flask
 opencv-python
 tinysoundfont
-mediapipe
+mediapipe @ https://github.com/google/mediapipe/releases/download/v0.8.9/mediapipe-0.8.9-cp39-cp39-manylinux2014_x86_64.whl
