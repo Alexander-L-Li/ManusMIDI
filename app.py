@@ -4,6 +4,7 @@ import mediapipe as mp
 import time
 import tinysoundfont
 import os
+import numpy as np
 
 # Flask app
 app = Flask(__name__)
@@ -87,6 +88,12 @@ def right(vec):
 detector = handDetector()
 cap = cv2.VideoCapture(0)
 
+# Create fallback frame if camera is not available
+if not cap.isOpened():
+    fallback_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    cv2.putText(fallback_frame, 'No camera available', (50, 240), 
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+
 # Calibration Variables
 inconsistency = [0, 0]
 ar_valid = [[], []]
@@ -101,6 +108,14 @@ def generate_frames():
 
     # Calibration Step
     while len(ar_valid[0]) <= 20 or len(ar_valid[1]) <= 20:
+        if not cap.isOpened():
+            # Use fallback frame when camera is not available
+            ret, buffer = cv2.imencode('.jpg', fallback_frame)
+            frame = buffer.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+            continue
+            
         success, img = cap.read()
         if not success:
             break
@@ -136,6 +151,14 @@ def generate_frames():
 
     # Main Frame Generation
     while True:
+        if not cap.isOpened():
+            # Use fallback frame when camera is not available
+            ret, buffer = cv2.imencode('.jpg', fallback_frame)
+            frame = buffer.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+            continue
+            
         success, img = cap.read()
         if not success:
             break
