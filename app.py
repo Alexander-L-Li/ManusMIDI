@@ -91,23 +91,31 @@ detector = handDetector()
 # Global frame buffer for video feed
 current_frame = None
 frame_lock = None
+last_processed_frame = None
 
 def get_frame():
-    global current_frame
+    global current_frame, last_processed_frame
+    if current_frame is None:
+        return None
+    
+    # Return the frame and store it as last processed
+    last_processed_frame = current_frame
     return current_frame
 
 # Frame Generator
 def generate_frames():
     global left_adjust, right_adjust, last_fingers, alt, defaultratios, ar_valid, inconsistency, current_frame
     pTime = 0
+    frame_count = 0
+    last_fps_time = time.time()
 
     # Calibration Step
     while len(ar_valid[0]) <= 20 or len(ar_valid[1]) <= 20:
         img = get_frame()
         if img is None:
             # Create a blank frame with message
-            img = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(img, "Waiting for camera...", (50, 240), 
+            img = np.zeros((720, 1280, 3), dtype=np.uint8)
+            cv2.putText(img, "Waiting for camera...", (50, 360), 
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
         else:
             cv2.putText(img, "PLACE YOUR HANDS OUT FACING CAMERA FOR CALIBRATION", (50, 50),
@@ -129,7 +137,16 @@ def generate_frames():
                     ar_valid[right(convert(lmlist))] = []
                     inconsistency[right(convert(lmlist))] = 0
 
-        ret, buffer = cv2.imencode('.jpg', img)
+        # Calculate and display FPS
+        frame_count += 1
+        current_time = time.time()
+        if current_time - last_fps_time >= 1.0:
+            fps = frame_count / (current_time - last_fps_time)
+            cv2.putText(img, f"FPS: {int(fps)}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            frame_count = 0
+            last_fps_time = current_time
+
+        ret, buffer = cv2.imencode('.jpg', img, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
         frame = buffer.tobytes()
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
@@ -140,12 +157,15 @@ def generate_frames():
             defaultratios[k][i] = sum(ratio[i] for ratio in ar_valid[k]) / len(ar_valid[k])
 
     # Main Frame Generation
+    frame_count = 0
+    last_fps_time = time.time()
+    
     while True:
         img = get_frame()
         if img is None:
             # Create a blank frame with message
-            img = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(img, "Waiting for camera...", (50, 240), 
+            img = np.zeros((720, 1280, 3), dtype=np.uint8)
+            cv2.putText(img, "Waiting for camera...", (50, 360), 
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
         else:
             img = detector.findHands(img)
@@ -180,7 +200,16 @@ def generate_frames():
 
                 cv2.putText(img, "HAND TRACKING ACTIVE", (10, 70), cv2.FONT_HERSHEY_PLAIN, 2, (0, 255, 0), 3)
 
-        ret, buffer = cv2.imencode('.jpg', img)
+            # Calculate and display FPS
+            frame_count += 1
+            current_time = time.time()
+            if current_time - last_fps_time >= 1.0:
+                fps = frame_count / (current_time - last_fps_time)
+                cv2.putText(img, f"FPS: {int(fps)}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                frame_count = 0
+                last_fps_time = current_time
+
+        ret, buffer = cv2.imencode('.jpg', img, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
         frame = buffer.tobytes()
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')

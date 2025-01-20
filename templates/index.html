@@ -40,29 +40,41 @@
         align-items: center;
         justify-content: center;
         min-height: 100vh;
-        background-color: #f0f0f0;
+        padding: 20px;
       }
       #videoElement {
         display: none;
       }
       #videoFeed {
-        width: 640px;
-        height: 480px;
-        background-color: #666;
-        margin-bottom: 20px;
+        width: 100%;
+        max-width: 1280px;
+        height: auto;
+        aspect-ratio: 16/9;
+        background-color: #000;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+      .video-container {
+        width: 100%;
+        max-width: 1280px;
+        margin: 0 auto;
+        position: relative;
       }
       .controls {
         margin: 20px 0;
+        display: flex;
+        gap: 10px;
+        justify-content: center;
       }
       button {
-        padding: 10px 20px;
-        margin: 0 10px;
+        padding: 12px 24px;
         font-size: 16px;
         cursor: pointer;
         background-color: #4CAF50;
         color: white;
         border: none;
         border-radius: 4px;
+        transition: background-color 0.2s;
       }
       button:hover {
         background-color: #45a049;
@@ -70,6 +82,8 @@
       .status {
         margin-top: 10px;
         font-size: 18px;
+        color: #333;
+        text-align: center;
       }
     </style>
   </head>
@@ -93,9 +107,7 @@
       id="video-container"
       class="hidden flex flex-col items-center justify-center h-full w-full"
     >
-      <div
-        class="relative aspect-video w-full max-w-6xl bg-black rounded-lg overflow-hidden shadow-lg"
-      >
+      <div class="video-container">
         <video id="videoElement" autoplay playsinline></video>
         <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Video Feed">
       </div>
@@ -132,13 +144,18 @@
       const status = document.getElementById('status');
       let stream = null;
       let isStreaming = false;
+      let frameCount = 0;
+      let lastFrameTime = 0;
+      const targetFPS = 30;
+      const frameInterval = 1000 / targetFPS;
 
       async function startVideo() {
         try {
           stream = await navigator.mediaDevices.getUserMedia({ 
             video: {
-              width: { ideal: 640 },
-              height: { ideal: 480 }
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+              frameRate: { ideal: 30 }
             }
           });
           video.srcObject = stream;
@@ -162,23 +179,34 @@
 
       async function startSendingFrames() {
         const canvas = document.createElement('canvas');
-        canvas.width = 640;
-        canvas.height = 480;
+        canvas.width = 1280;
+        canvas.height = 720;
         const ctx = canvas.getContext('2d');
+        let pendingFrame = false;
 
         async function sendFrame() {
-          if (!isStreaming) return;
+          if (!isStreaming || pendingFrame) return;
 
-          // Draw current video frame to canvas
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const now = performance.now();
+          const elapsed = now - lastFrameTime;
+
+          if (elapsed < frameInterval) {
+            requestAnimationFrame(sendFrame);
+            return;
+          }
+
+          pendingFrame = true;
           
-          // Convert canvas to blob
-          const blob = await new Promise(resolve => {
-            canvas.toBlob(resolve, 'image/jpeg');
-          });
-
-          // Send frame to server
           try {
+            // Draw current video frame to canvas
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            // Convert canvas to blob with lower JPEG quality for better performance
+            const blob = await new Promise(resolve => {
+              canvas.toBlob(resolve, 'image/jpeg', 0.8);
+            });
+
+            // Send frame to server
             const formData = new FormData();
             formData.append('frame', blob);
             
@@ -186,17 +214,26 @@
               method: 'POST',
               body: formData
             });
+
+            frameCount++;
+            lastFrameTime = now;
+            
+            // Calculate and show FPS every second
+            if (frameCount % targetFPS === 0) {
+              const fps = Math.round((frameCount * 1000) / (now - lastFrameTime));
+              status.textContent = `Camera active - ${fps} FPS`;
+            }
           } catch (err) {
             console.error('Error sending frame:', err);
+          } finally {
+            pendingFrame = false;
           }
 
-          // Schedule next frame
-          if (isStreaming) {
-            setTimeout(sendFrame, 1000 / 30); // 30 fps
-          }
+          requestAnimationFrame(sendFrame);
         }
 
         // Start sending frames
+        lastFrameTime = performance.now();
         sendFrame();
       }
 
