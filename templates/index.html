@@ -4,12 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Manus MIDI</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
     <style>
-      @tailwind base;
-      @tailwind components;
-      @tailwind utilities;
-
       :root {
         --background: #ffffff;
         --foreground: #171717;
@@ -28,12 +26,6 @@
         font-family: Arial, Helvetica, sans-serif;
       }
 
-      @layer utilities {
-        .text-balance {
-          text-wrap: balance;
-        }
-      }
-
       .container {
         display: flex;
         flex-direction: column;
@@ -45,7 +37,7 @@
       #videoElement {
         display: none;
       }
-      #videoFeed {
+      #output_canvas {
         width: 100%;
         max-width: 1280px;
         height: auto;
@@ -65,6 +57,7 @@
         display: flex;
         gap: 10px;
         justify-content: center;
+        flex-wrap: wrap;
       }
       button {
         padding: 12px 24px;
@@ -79,11 +72,33 @@
       button:hover {
         background-color: #45a049;
       }
+      button:disabled {
+        background-color: #cccccc;
+        cursor: not-allowed;
+      }
       .status {
         margin-top: 10px;
         font-size: 18px;
         color: #333;
         text-align: center;
+        padding: 10px;
+        border-radius: 4px;
+        background-color: rgba(255, 255, 255, 0.8);
+      }
+      .calibration-overlay {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background-color: rgba(0, 0, 0, 0.8);
+        color: white;
+        padding: 20px;
+        border-radius: 8px;
+        text-align: center;
+        display: none;
+      }
+      .calibration-overlay.active {
+        display: block;
       }
     </style>
   </head>
@@ -109,11 +124,16 @@
     >
       <div class="video-container">
         <video id="videoElement" autoplay playsinline></video>
-        <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Video Feed">
+        <canvas id="output_canvas"></canvas>
+        <div id="calibration-overlay" class="calibration-overlay">
+          <h2>Calibration</h2>
+          <p id="calibration-instructions">Hold your hands steady in front of the camera</p>
+        </div>
       </div>
       <div class="controls">
-        <button onclick="startVideo()">Start Camera</button>
-        <button onclick="stopVideo()">Stop Camera</button>
+        <button onclick="startVideo()" id="startBtn">Start Camera</button>
+        <button onclick="stopVideo()" id="stopBtn" disabled>Stop Camera</button>
+        <button onclick="startCalibration()" id="calibrateBtn" disabled>Start Calibration</button>
       </div>
       <div class="status" id="status"></div>
     </div>
@@ -129,6 +149,204 @@
     </div>
 
     <script>
+      const videoElement = document.getElementById('videoElement');
+      const canvasElement = document.getElementById('output_canvas');
+      const canvasCtx = canvasElement.getContext('2d');
+      const status = document.getElementById('status');
+      const calibrationOverlay = document.getElementById('calibration-overlay');
+      const startBtn = document.getElementById('startBtn');
+      const stopBtn = document.getElementById('stopBtn');
+      const calibrateBtn = document.getElementById('calibrateBtn');
+      
+      // Set canvas size
+      canvasElement.width = 1280;
+      canvasElement.height = 720;
+
+      let stream = null;
+      let isStreaming = false;
+      let hands = null;
+      let camera = null;
+      let lastProcessTime = 0;
+      let frameCount = 0;
+      let isCalibrating = false;
+      let calibrationComplete = {
+        left: false,
+        right: false
+      };
+      
+      function onResults(results) {
+        // Calculate FPS
+        const now = performance.now();
+        frameCount++;
+        if (now - lastProcessTime >= 1000) {
+          const fps = Math.round(frameCount * 1000 / (now - lastProcessTime));
+          status.textContent = `Processing: ${fps} FPS`;
+          frameCount = 0;
+          lastProcessTime = now;
+        }
+
+        // Draw video frame
+        canvasCtx.save();
+        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+        canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+        if (results.multiHandLandmarks) {
+          for (const landmarks of results.multiHandLandmarks) {
+            // Draw hand landmarks
+            drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS,
+                { color: '#00FF00', lineWidth: 5 });
+            drawLandmarks(canvasCtx, landmarks,
+                { color: '#FF0000', lineWidth: 2 });
+
+            // Convert landmarks to pixel coordinates
+            const handData = landmarks.map(lm => [
+              lm.x * canvasElement.width,
+              lm.y * canvasElement.height
+            ]);
+
+            // Send to appropriate endpoint based on calibration state
+            if (isCalibrating) {
+              sendCalibrationData(handData);
+            } else {
+              sendHandData(handData);
+            }
+          }
+        }
+
+        canvasCtx.restore();
+      }
+
+      async function sendHandData(landmarks) {
+        try {
+          const response = await fetch('/process_hand', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ landmarks })
+          });
+          
+          if (!response.ok) {
+            throw new Error('Failed to process hand data');
+          }
+        } catch (err) {
+          console.error('Error processing hand:', err);
+        }
+      }
+
+      async function sendCalibrationData(landmarks) {
+        try {
+          const response = await fetch('/calibrate', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ landmarks })
+          });
+          
+          if (!response.ok) {
+            throw new Error('Failed to process calibration data');
+          }
+
+          const data = await response.json();
+          
+          // Update calibration status
+          if (data.status.includes('complete')) {
+            if (data.status.includes('right')) {
+              calibrationComplete.right = true;
+            } else if (data.status.includes('left')) {
+              calibrationComplete.left = true;
+            }
+
+            // Check if both hands are calibrated
+            if (calibrationComplete.left && calibrationComplete.right) {
+              isCalibrating = false;
+              calibrationOverlay.classList.remove('active');
+              status.textContent = 'Calibration complete! You can now use hand gestures.';
+            }
+          }
+          
+          // Update calibration instructions
+          document.getElementById('calibration-instructions').textContent = data.status;
+        } catch (err) {
+          console.error('Error during calibration:', err);
+        }
+      }
+
+      async function setupMediaPipe() {
+        hands = new Hands({
+          locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+          }
+        });
+
+        hands.setOptions({
+          maxNumHands: 2,
+          modelComplexity: 1,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+
+        hands.onResults(onResults);
+
+        camera = new Camera(videoElement, {
+          onFrame: async () => {
+            await hands.send({ image: videoElement });
+          },
+          width: 1280,
+          height: 720
+        });
+      }
+
+      async function startVideo() {
+        if (!hands) {
+          await setupMediaPipe();
+        }
+        
+        try {
+          await camera.start();
+          isStreaming = true;
+          status.textContent = 'Camera active';
+          lastProcessTime = performance.now();
+          
+          // Update button states
+          startBtn.disabled = true;
+          stopBtn.disabled = false;
+          calibrateBtn.disabled = false;
+        } catch (err) {
+          console.error('Error starting camera:', err);
+          status.textContent = 'Error accessing camera. Please make sure you have granted camera permissions.';
+        }
+      }
+
+      function stopVideo() {
+        if (camera) {
+          camera.stop();
+          isStreaming = false;
+          status.textContent = 'Camera stopped';
+          
+          // Update button states
+          startBtn.disabled = false;
+          stopBtn.disabled = true;
+          calibrateBtn.disabled = true;
+          
+          // Reset calibration
+          isCalibrating = false;
+          calibrationComplete.left = false;
+          calibrationComplete.right = false;
+          calibrationOverlay.classList.remove('active');
+        }
+      }
+
+      function startCalibration() {
+        isCalibrating = true;
+        calibrationComplete.left = false;
+        calibrationComplete.right = false;
+        calibrationOverlay.classList.add('active');
+        status.textContent = 'Calibration started';
+        document.getElementById('calibration-instructions').textContent = 'Hold your hands steady in front of the camera';
+      }
+
       function startVideoFeed() {
         // Hide the introduction and button
         document.getElementById("intro-section").classList.add("hidden");
@@ -138,103 +356,6 @@
         const videoContainer = document.getElementById("video-container");
         videoContainer.classList.remove("hidden");
         videoContainer.classList.add("flex");
-      }
-
-      const video = document.getElementById('videoElement');
-      const status = document.getElementById('status');
-      let stream = null;
-      let isStreaming = false;
-      let frameCount = 0;
-      let lastFrameTime = 0;
-      const targetFPS = 30;
-      const frameInterval = 1000 / targetFPS;
-
-      async function startVideo() {
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({ 
-            video: {
-              width: { ideal: 1280 },
-              height: { ideal: 720 },
-              frameRate: { ideal: 30 }
-            }
-          });
-          video.srcObject = stream;
-          status.textContent = 'Camera active';
-          isStreaming = true;
-          startSendingFrames();
-        } catch (err) {
-          console.error('Error accessing camera:', err);
-          status.textContent = 'Error accessing camera. Please make sure you have granted camera permissions.';
-        }
-      }
-
-      function stopVideo() {
-        if (stream) {
-          stream.getTracks().forEach(track => track.stop());
-          video.srcObject = null;
-          status.textContent = 'Camera stopped';
-          isStreaming = false;
-        }
-      }
-
-      async function startSendingFrames() {
-        const canvas = document.createElement('canvas');
-        canvas.width = 1280;
-        canvas.height = 720;
-        const ctx = canvas.getContext('2d');
-        let pendingFrame = false;
-
-        async function sendFrame() {
-          if (!isStreaming || pendingFrame) return;
-
-          const now = performance.now();
-          const elapsed = now - lastFrameTime;
-
-          if (elapsed < frameInterval) {
-            requestAnimationFrame(sendFrame);
-            return;
-          }
-
-          pendingFrame = true;
-          
-          try {
-            // Draw current video frame to canvas
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            
-            // Convert canvas to blob with lower JPEG quality for better performance
-            const blob = await new Promise(resolve => {
-              canvas.toBlob(resolve, 'image/jpeg', 0.8);
-            });
-
-            // Send frame to server
-            const formData = new FormData();
-            formData.append('frame', blob);
-            
-            await fetch('/upload_frame', {
-              method: 'POST',
-              body: formData
-            });
-
-            frameCount++;
-            lastFrameTime = now;
-            
-            // Calculate and show FPS every second
-            if (frameCount % targetFPS === 0) {
-              const fps = Math.round((frameCount * 1000) / (now - lastFrameTime));
-              status.textContent = `Camera active - ${fps} FPS`;
-            }
-          } catch (err) {
-            console.error('Error sending frame:', err);
-          } finally {
-            pendingFrame = false;
-          }
-
-          requestAnimationFrame(sendFrame);
-        }
-
-        // Start sending frames
-        lastFrameTime = performance.now();
-        sendFrame();
       }
 
       // Auto-start camera when page loads
