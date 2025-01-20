@@ -5,6 +5,7 @@ import time
 import tinysoundfont
 import os
 import numpy as np
+from io import BytesIO
 
 # Flask app
 app = Flask(__name__)
@@ -87,19 +88,114 @@ def right(vec):
 # Initialize Detector
 detector = handDetector()
 
-# Calibration Variables
-inconsistency = [0, 0]
-ar_valid = [[], []]
-alt = 0
-defaultratios = [[0 for _ in range(4)] for _ in range(2)]
-last_fingers = None
+# Global frame buffer for video feed
+current_frame = None
+frame_lock = None
+
+def get_frame():
+    global current_frame
+    return current_frame
+
+# Frame Generator
+def generate_frames():
+    global left_adjust, right_adjust, last_fingers, alt, defaultratios, ar_valid, inconsistency, current_frame
+    pTime = 0
+
+    # Calibration Step
+    while len(ar_valid[0]) <= 20 or len(ar_valid[1]) <= 20:
+        img = get_frame()
+        if img is None:
+            # Create a blank frame with message
+            img = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(img, "Waiting for camera...", (50, 240), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        else:
+            cv2.putText(img, "PLACE YOUR HANDS OUT FACING CAMERA FOR CALIBRATION", (50, 50),
+                        cv2.FONT_HERSHEY_PLAIN, 2, (255, 0, 255), 3)
+            img = detector.findHands(img)
+            lmlist = detector.findPosition(img, alt)
+            alt = 1 - alt
+
+            if lmlist:
+                if len(ar_valid[right(convert(lmlist))]) == 0:
+                    ar_valid[right(convert(lmlist))].append(compute(convert(lmlist)))
+                elif computeDiff(compute(convert(lmlist)), ar_valid[right(convert(lmlist))][0]) > 0.1:
+                    inconsistency[right(convert(lmlist))] += 1
+                    cv2.putText(img, "DON'T MOVE YOUR HANDS!!", (50, 100), cv2.FONT_HERSHEY_PLAIN, 2, (255, 0, 255), 3)
+                else:
+                    ar_valid[right(convert(lmlist))].append(compute(convert(lmlist)))
+
+                if inconsistency[right(convert(lmlist))] >= 20:
+                    ar_valid[right(convert(lmlist))] = []
+                    inconsistency[right(convert(lmlist))] = 0
+
+        ret, buffer = cv2.imencode('.jpg', img)
+        frame = buffer.tobytes()
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+
+    # Calculate default ratios
+    for k in range(2):
+        for i in range(len(ar_valid[k][0])):
+            defaultratios[k][i] = sum(ratio[i] for ratio in ar_valid[k]) / len(ar_valid[k])
+
+    # Main Frame Generation
+    while True:
+        img = get_frame()
+        if img is None:
+            # Create a blank frame with message
+            img = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(img, "Waiting for camera...", (50, 240), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        else:
+            img = detector.findHands(img)
+            lmlist = detector.findPosition(img, alt)
+            alt = 1 - alt
+
+            if lmlist:
+                ratios = compute(convert(lmlist))
+                if len(ratios) > 0:
+                    if right(convert(lmlist)) == 1:
+                        if len(defaultratios[1]) > 0:
+                            diff = computeDiff(ratios, defaultratios[1])
+                            if diff > 0.1:
+                                note = int((diff - 0.1) / 0.2 * 7)
+                                if note < 0:
+                                    note = 0
+                                if note > 7:
+                                    note = 7
+                                synth.noteon(0, notes[note] + 12, 100)
+                                synth.noteoff(0, notes[note] + 12, 100)
+                    else:
+                        if len(defaultratios[0]) > 0:
+                            diff = computeDiff(ratios, defaultratios[0])
+                            if diff > 0.1:
+                                note = int((diff - 0.1) / 0.2 * 7)
+                                if note < 0:
+                                    note = 0
+                                if note > 7:
+                                    note = 7
+                                synth.noteon(0, notes[note], 100)
+                                synth.noteoff(0, notes[note], 100)
+
+                cv2.putText(img, "HAND TRACKING ACTIVE", (10, 70), cv2.FONT_HERSHEY_PLAIN, 2, (0, 255, 0), 3)
+
+        ret, buffer = cv2.imencode('.jpg', img)
+        frame = buffer.tobytes()
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/process_frame', methods=['POST'])
-def process_frame():
+@app.route('/video_feed')
+def video_feed():
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/upload_frame', methods=['POST'])
+def upload_frame():
+    global current_frame
     if 'frame' not in request.files:
         return jsonify({'error': 'No frame provided'}), 400
     
@@ -109,54 +205,19 @@ def process_frame():
     
     # Convert bytes to numpy array
     nparr = np.frombuffer(frame_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    current_frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     
-    if img is None:
+    if current_frame is None:
         return jsonify({'error': 'Invalid frame data'}), 400
 
-    # Process frame with hand detection
-    img = detector.findHands(img)
-    lmList = detector.findPosition(img, draw=False)
-    
-    status_message = "Processing frame..."
-    
-    if len(lmList) != 0:
-        # Your existing hand processing logic here
-        # This is where you'd implement the MIDI control logic
-        vec = lmList
-        
-        # Calculate finger positions and generate MIDI notes
-        # (Your existing logic from generate_frames)
-        ratios = compute(convert(vec))
-        if len(ratios) > 0:
-            if right(convert(vec)) == 1:
-                if len(defaultratios[1]) > 0:
-                    diff = computeDiff(ratios, defaultratios[1])
-                    if diff > 0.1:
-                        note = int((diff - 0.1) / 0.2 * 7)
-                        if note < 0:
-                            note = 0
-                        if note > 7:
-                            note = 7
-                        synth.noteon(0, notes[note] + 12, 100)
-                        synth.noteoff(0, notes[note] + 12, 100)
-            else:
-                if len(defaultratios[0]) > 0:
-                    diff = computeDiff(ratios, defaultratios[0])
-                    if diff > 0.1:
-                        note = int((diff - 0.1) / 0.2 * 7)
-                        if note < 0:
-                            note = 0
-                        if note > 7:
-                            note = 7
-                        synth.noteon(0, notes[note], 100)
-                        synth.noteoff(0, notes[note], 100)
-        
-        status_message = "Hand detected"
-    
-    return jsonify({
-        'status': status_message
-    })
+    return jsonify({'status': 'Frame received'})
+
+# Calibration Variables
+inconsistency = [0, 0]
+ar_valid = [[], []]
+alt = 0
+defaultratios = [[0 for _ in range(4)] for _ in range(2)]
+last_fingers = None
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

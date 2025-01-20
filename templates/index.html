@@ -43,6 +43,9 @@
         background-color: #f0f0f0;
       }
       #videoElement {
+        display: none;
+      }
+      #videoFeed {
         width: 640px;
         height: 480px;
         background-color: #666;
@@ -94,6 +97,7 @@
         class="relative aspect-video w-full max-w-6xl bg-black rounded-lg overflow-hidden shadow-lg"
       >
         <video id="videoElement" autoplay playsinline></video>
+        <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Video Feed">
       </div>
       <div class="controls">
         <button onclick="startVideo()">Start Camera</button>
@@ -127,6 +131,7 @@
       const video = document.getElementById('videoElement');
       const status = document.getElementById('status');
       let stream = null;
+      let isStreaming = false;
 
       async function startVideo() {
         try {
@@ -138,9 +143,8 @@
           });
           video.srcObject = stream;
           status.textContent = 'Camera active';
-          
-          // Start sending frames to server
-          startProcessing();
+          isStreaming = true;
+          startSendingFrames();
         } catch (err) {
           console.error('Error accessing camera:', err);
           status.textContent = 'Error accessing camera. Please make sure you have granted camera permissions.';
@@ -152,52 +156,48 @@
           stream.getTracks().forEach(track => track.stop());
           video.srcObject = null;
           status.textContent = 'Camera stopped';
+          isStreaming = false;
         }
       }
 
-      async function startProcessing() {
+      async function startSendingFrames() {
         const canvas = document.createElement('canvas');
         canvas.width = 640;
         canvas.height = 480;
         const ctx = canvas.getContext('2d');
 
-        async function processFrame() {
-          if (stream && stream.active) {
-            // Draw current video frame to canvas
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            
-            // Convert canvas to blob
-            const blob = await new Promise(resolve => {
-              canvas.toBlob(resolve, 'image/jpeg');
-            });
+        async function sendFrame() {
+          if (!isStreaming) return;
 
-            // Send frame to server
-            try {
-              const formData = new FormData();
-              formData.append('frame', blob);
-              
-              const response = await fetch('/process_frame', {
-                method: 'POST',
-                body: formData
-              });
-              
-              if (response.ok) {
-                const result = await response.json();
-                // Update status with any processing results
-                if (result.status) {
-                  status.textContent = result.status;
-                }
-              }
-            } catch (err) {
-              console.error('Error processing frame:', err);
-            }
+          // Draw current video frame to canvas
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          
+          // Convert canvas to blob
+          const blob = await new Promise(resolve => {
+            canvas.toBlob(resolve, 'image/jpeg');
+          });
+
+          // Send frame to server
+          try {
+            const formData = new FormData();
+            formData.append('frame', blob);
+            
+            await fetch('/upload_frame', {
+              method: 'POST',
+              body: formData
+            });
+          } catch (err) {
+            console.error('Error sending frame:', err);
           }
+
           // Schedule next frame
-          requestAnimationFrame(processFrame);
+          if (isStreaming) {
+            setTimeout(sendFrame, 1000 / 30); // 30 fps
+          }
         }
 
-        // Start processing frames
-        processFrame();
+        // Start sending frames
+        sendFrame();
       }
 
       // Auto-start camera when page loads
