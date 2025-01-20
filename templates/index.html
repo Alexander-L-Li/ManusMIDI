@@ -33,6 +33,41 @@
           text-wrap: balance;
         }
       }
+
+      .container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        background-color: #f0f0f0;
+      }
+      #videoElement {
+        width: 640px;
+        height: 480px;
+        background-color: #666;
+        margin-bottom: 20px;
+      }
+      .controls {
+        margin: 20px 0;
+      }
+      button {
+        padding: 10px 20px;
+        margin: 0 10px;
+        font-size: 16px;
+        cursor: pointer;
+        background-color: #4CAF50;
+        color: white;
+        border: none;
+        border-radius: 4px;
+      }
+      button:hover {
+        background-color: #45a049;
+      }
+      .status {
+        margin-top: 10px;
+        font-size: 18px;
+      }
     </style>
   </head>
   <body
@@ -58,16 +93,13 @@
       <div
         class="relative aspect-video w-full max-w-6xl bg-black rounded-lg overflow-hidden shadow-lg"
       >
-        <img
-          id="video-feed"
-          src="/video_feed"
-          alt="Video Stream"
-          class="absolute inset-0 w-full h-full object-cover"
-        />
+        <video id="videoElement" autoplay playsinline></video>
       </div>
-      <p class="text-center mt-4 text-lg text-gray-700">
-        Watch your hand movements in real-time!
-      </p>
+      <div class="controls">
+        <button onclick="startVideo()">Start Camera</button>
+        <button onclick="stopVideo()">Stop Camera</button>
+      </div>
+      <div class="status" id="status"></div>
     </div>
 
     <!-- Try Button Section -->
@@ -91,6 +123,85 @@
         videoContainer.classList.remove("hidden");
         videoContainer.classList.add("flex");
       }
+
+      const video = document.getElementById('videoElement');
+      const status = document.getElementById('status');
+      let stream = null;
+
+      async function startVideo() {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ 
+            video: {
+              width: { ideal: 640 },
+              height: { ideal: 480 }
+            }
+          });
+          video.srcObject = stream;
+          status.textContent = 'Camera active';
+          
+          // Start sending frames to server
+          startProcessing();
+        } catch (err) {
+          console.error('Error accessing camera:', err);
+          status.textContent = 'Error accessing camera. Please make sure you have granted camera permissions.';
+        }
+      }
+
+      function stopVideo() {
+        if (stream) {
+          stream.getTracks().forEach(track => track.stop());
+          video.srcObject = null;
+          status.textContent = 'Camera stopped';
+        }
+      }
+
+      async function startProcessing() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 640;
+        canvas.height = 480;
+        const ctx = canvas.getContext('2d');
+
+        async function processFrame() {
+          if (stream && stream.active) {
+            // Draw current video frame to canvas
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            // Convert canvas to blob
+            const blob = await new Promise(resolve => {
+              canvas.toBlob(resolve, 'image/jpeg');
+            });
+
+            // Send frame to server
+            try {
+              const formData = new FormData();
+              formData.append('frame', blob);
+              
+              const response = await fetch('/process_frame', {
+                method: 'POST',
+                body: formData
+              });
+              
+              if (response.ok) {
+                const result = await response.json();
+                // Update status with any processing results
+                if (result.status) {
+                  status.textContent = result.status;
+                }
+              }
+            } catch (err) {
+              console.error('Error processing frame:', err);
+            }
+          }
+          // Schedule next frame
+          requestAnimationFrame(processFrame);
+        }
+
+        // Start processing frames
+        processFrame();
+      }
+
+      // Auto-start camera when page loads
+      document.addEventListener('DOMContentLoaded', startVideo);
     </script>
   </body>
 </html>

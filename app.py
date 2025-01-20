@@ -1,4 +1,4 @@
-from flask import Flask, Response, render_template
+from flask import Flask, Response, render_template, request, jsonify
 import cv2
 import mediapipe as mp
 import time
@@ -86,13 +86,6 @@ def right(vec):
 
 # Initialize Detector
 detector = handDetector()
-cap = cv2.VideoCapture(0)
-
-# Create fallback frame if camera is not available
-if not cap.isOpened():
-    fallback_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    cv2.putText(fallback_frame, 'No camera available', (50, 240), 
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
 # Calibration Variables
 inconsistency = [0, 0]
@@ -101,91 +94,69 @@ alt = 0
 defaultratios = [[0 for _ in range(4)] for _ in range(2)]
 last_fingers = None
 
-# Frame Generator
-def generate_frames():
-    global left_adjust, right_adjust, last_fingers, alt, defaultratios, ar_valid, inconsistency
-    pTime = 0
-
-    # Calibration Step
-    while len(ar_valid[0]) <= 20 or len(ar_valid[1]) <= 20:
-        if not cap.isOpened():
-            # Use fallback frame when camera is not available
-            ret, buffer = cv2.imencode('.jpg', fallback_frame)
-            frame = buffer.tobytes()
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-            continue
-            
-        success, img = cap.read()
-        if not success:
-            break
-
-        cv2.putText(img, "PLACE YOUR HANDS OUT FACING CAMERA FOR CALIBRATION", (50, 50),
-                    cv2.FONT_HERSHEY_PLAIN, 2, (255, 0, 255), 3)
-        img = detector.findHands(img)
-        lmlist = detector.findPosition(img, alt)
-        alt = 1 - alt
-
-        if lmlist:
-            if len(ar_valid[right(convert(lmlist))]) == 0:
-                ar_valid[right(convert(lmlist))].append(compute(convert(lmlist)))
-            elif computeDiff(compute(convert(lmlist)), ar_valid[right(convert(lmlist))][0]) > 0.1:
-                inconsistency[right(convert(lmlist))] += 1
-                cv2.putText(img, "DON'T MOVE YOUR HANDS!!", (50, 100), cv2.FONT_HERSHEY_PLAIN, 2, (255, 0, 255), 3)
-            else:
-                ar_valid[right(convert(lmlist))].append(compute(convert(lmlist)))
-
-            if inconsistency[right(convert(lmlist))] >= 20:
-                ar_valid[right(convert(lmlist))] = []
-                inconsistency[right(convert(lmlist))] = 0
-
-        ret, buffer = cv2.imencode('.jpg', img)
-        img = buffer.tobytes()
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + img + b'\r\n')
-
-    # Calculate default ratios
-    for k in range(2):
-        for i in range(len(ar_valid[k][0])):
-            defaultratios[k][i] = sum(ratio[i] for ratio in ar_valid[k]) / len(ar_valid[k])
-
-    # Main Frame Generation
-    while True:
-        if not cap.isOpened():
-            # Use fallback frame when camera is not available
-            ret, buffer = cv2.imencode('.jpg', fallback_frame)
-            frame = buffer.tobytes()
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-            continue
-            
-        success, img = cap.read()
-        if not success:
-            break
-
-        img = detector.findHands(img)
-        lmlist = detector.findPosition(img, alt)
-        alt = 1 - alt
-
-        if lmlist:
-            # Hand tracking and MIDI logic
-            # ... Original main loop logic goes here ...
-
-            cv2.putText(img, "HAND TRACKING ACTIVE", (10, 70), cv2.FONT_HERSHEY_PLAIN, 2, (0, 255, 0), 3)
-
-        ret, buffer = cv2.imencode('.jpg', img)
-        img = buffer.tobytes()
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + img + b'\r\n')
-
-# Flask Routes
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/video_feed')
-def video_feed():
-    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+@app.route('/process_frame', methods=['POST'])
+def process_frame():
+    if 'frame' not in request.files:
+        return jsonify({'error': 'No frame provided'}), 400
+    
+    # Read frame from request
+    frame_file = request.files['frame']
+    frame_bytes = frame_file.read()
+    
+    # Convert bytes to numpy array
+    nparr = np.frombuffer(frame_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    
+    if img is None:
+        return jsonify({'error': 'Invalid frame data'}), 400
+
+    # Process frame with hand detection
+    img = detector.findHands(img)
+    lmList = detector.findPosition(img, draw=False)
+    
+    status_message = "Processing frame..."
+    
+    if len(lmList) != 0:
+        # Your existing hand processing logic here
+        # This is where you'd implement the MIDI control logic
+        vec = lmList
+        
+        # Calculate finger positions and generate MIDI notes
+        # (Your existing logic from generate_frames)
+        ratios = compute(convert(vec))
+        if len(ratios) > 0:
+            if right(convert(vec)) == 1:
+                if len(defaultratios[1]) > 0:
+                    diff = computeDiff(ratios, defaultratios[1])
+                    if diff > 0.1:
+                        note = int((diff - 0.1) / 0.2 * 7)
+                        if note < 0:
+                            note = 0
+                        if note > 7:
+                            note = 7
+                        synth.noteon(0, notes[note] + 12, 100)
+                        synth.noteoff(0, notes[note] + 12, 100)
+            else:
+                if len(defaultratios[0]) > 0:
+                    diff = computeDiff(ratios, defaultratios[0])
+                    if diff > 0.1:
+                        note = int((diff - 0.1) / 0.2 * 7)
+                        if note < 0:
+                            note = 0
+                        if note > 7:
+                            note = 7
+                        synth.noteon(0, notes[note], 100)
+                        synth.noteoff(0, notes[note], 100)
+        
+        status_message = "Hand detected"
+    
+    return jsonify({
+        'status': status_message
+    })
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
