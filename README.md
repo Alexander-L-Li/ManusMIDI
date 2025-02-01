@@ -1,6 +1,6 @@
-# ManusMIDI (2024 HackMIT)
+# https://manusmidi.onrender.com/
 
-Project link: https://manusmidi.onrender.com/
+Project built for 2024 HackMIT
 
 ## Inspiration
 
