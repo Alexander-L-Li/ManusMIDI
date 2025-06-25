@@ -2,6 +2,8 @@
 
 Project link: https://manusmidi.onrender.com/
 
+Collaborators: Christopher Chen, Laura Lerebours, & Hamza Wadiwala.
+
 ## Inspiration
 
 As passionate musicians, we were eager to develop an interactive project that incorporated everything necessary: fun, creativity, and melodic freedom.
